@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>画面共有（スマホ視聴対応）</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #000; color: #fff; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; overflow: hidden; }
+        .container { width: 100%; max-width: 600px; padding: 20px; box-sizing: border-box; text-align: center; }
+        
+        .video-container { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #111; border-radius: 12px; overflow: hidden; margin: 20px 0; border: 1px solid #333; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        
+        /* スマホ向け：再生がブロックされた時に出すボタン */
+        #playOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 10; cursor: pointer; }
+        .play-icon { font-size: 50px; margin-bottom: 10px; }
+
+        .controls { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+        input { width: 80%; padding: 15px; border-radius: 10px; border: 1px solid #444; background: #222; color: #fff; font-size: 16px; text-align: center; }
+        .btn-group { display: flex; gap: 10px; width: 80%; }
+        button { flex: 1; padding: 15px; border-radius: 10px; border: none; font-weight: bold; font-size: 14px; cursor: pointer; }
+        
+        .btn-share { background: #0081f2; color: white; }
+        .btn-view { background: #25ba3b; color: white; }
+        .btn-stop { background: #f25a5a; color: white; display: none; width: 80%; }
+        
+        #status { font-size: 12px; color: #888; margin-top: 15px; line-height: 1.4; padding: 0 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="mainUI">
+    <h2 id="title">Screen Share</h2>
+    
+    <div class="video-container">
+        <div id="playOverlay" onclick="forcePlay()">
+            <div class="play-icon">▶️</div>
+            <div>タップして視聴を開始</div>
+        </div>
+        <video id="remoteVideo" autoplay playsinline webkit-playsinline controls></video>
+    </div>
+
+    <div class="controls">
+        <input type="text" id="roomId" placeholder="ルームIDを入力" autocomplete="off">
+        <div class="btn-group" id="startButtons">
+            <button class="btn-share" onclick="startHosting()">配信</button>
+            <button class="btn-view" onclick="startViewing()">視聴</button>
+        </div>
+        <button id="stopBtn" class="btn-stop" onclick="location.reload()">終了 / 切断</button>
+    </div>
+
+    <div id="status">ステータス: IDを決めて開始してください</div>
+</div>
+
+<script>
+    let peer = null;
+    let localStream = null;
+    const videoEl = document.getElementById('remoteVideo');
+    const overlay = document.getElementById('playOverlay');
+
+    function setStatus(msg) {
+        document.getElementById('status').innerText = msg;
+    }
+
+    // スマホでの強制再生
+    function forcePlay() {
+        videoEl.play();
+        overlay.style.display = 'none';
+    }
+
+    // 【ホスト側】
+    async function startHosting() {
+        const id = document.getElementById('roomId').value;
+        if (!id) return alert('IDを入力してください');
+
+        try {
+            localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            videoEl.srcObject = localStream;
+            videoEl.muted = true; // 自分の声がループしないようにミュート
+
+            peer = new Peer(id);
+            peer.on('open', () => {
+                setStatus(`配信中：ID「${id}」を相手に伝えてください`);
+                uiChange(true);
+            });
+
+            peer.on('call', (call) => {
+                call.answer(localStream);
+                setStatus('視聴者が接続しました');
+            });
+
+            localStream.getVideoTracks()[0].onended = () => location.reload();
+
+        } catch (e) {
+            alert('画面共有エラー：PCから操作してください');
+        }
+    }
+
+    // 【視聴側】
+    function startViewing() {
+        const id = document.getElementById('roomId').value;
+        if (!id) return alert('接続先IDを入力してください');
+
+        peer = new Peer();
+        peer.on('open', () => {
+            setStatus('接続中...');
+            const call = peer.call(id, new MediaStream());
+
+            call.on('stream', (stream) => {
+                videoEl.srcObject = stream;
+                uiChange(true);
+                setStatus('受信成功！');
+                
+                // スマホの自動再生ブロック対策
+                videoEl.play().catch(() => {
+                    overlay.style.display = 'flex';
+                    setStatus('再生ボタンを押してください');
+                });
+            });
+
+            call.on('error', () => {
+                alert('エラー：ホストが見つかりません');
+                location.reload();
+            });
+        });
+    }
+
+    function uiChange(isStarted) {
+        if(isStarted) {
+            document.getElementById('startButtons').style.display = 'none';
+            document.getElementById('roomId').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'block';
+        }
+    }
+</script>
+
+</body>
+</html>
