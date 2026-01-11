@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multi-Stream (Optimized)</title>
+    <meta name="referrer" content="no-referrer">
+    <title>P2P Multi-Stream (Mobile Optimized)</title>
     <style>
         :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
         body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
@@ -11,7 +12,7 @@
         video { width: 100%; aspect-ratio: 16/9; background: #000; border: 1px solid #333; margin: 10px 0; border-radius: 4px; }
         textarea { width: 100%; height: 60px; background: #000; color: var(--primary); border: 1px solid var(--primary); padding: 8px; box-sizing: border-box; font-size: 10px; margin: 5px 0; border-style: dashed; }
         .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; }
+        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; border-radius: 4px; }
         button:hover { background: var(--primary); color: #000; }
         .step { margin: 15px 0; padding: 10px; background: var(--panel); border-radius: 4px; border: 1px solid #333; }
         .label { font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; display: block; }
@@ -33,13 +34,13 @@
     <div id="commArea" class="hidden">
         <div class="step">
             <span class="label">1. あなたの短縮コード:</span>
-            <textarea id="localSdp" readonly></textarea>
+            <textarea id="localSdp" readonly placeholder="生成中..."></textarea>
             <button style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
         </div>
         <div class="step">
             <span class="label">2. 相手からのコードを貼り付け:</span>
             <textarea id="remoteSdp" placeholder="ここにペースト"></textarea>
-            <button id="connectBtn" style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
+            <button style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
         </div>
         <p id="multiInfo" style="font-size: 11px; color: #888; text-align: center;"></p>
     </div>
@@ -48,49 +49,51 @@
 </div>
 
 <script>
-    const v = document.getElementById('v'), localSdp = document.getElementById('localSdp'), remoteSdp = document.getElementById('remoteSdp'), status = document.getElementById('status');
+    const v = document.getElementById('v'), 
+          localSdp = document.getElementById('localSdp'), 
+          remoteSdp = document.getElementById('remoteSdp'), 
+          status = document.getElementById('status');
     let pc, stream, connections = [];
 
+    // STUNサーバー設定
     const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
     function setStatus(msg) { status.innerText = ">> " + msg; }
 
     function createPC() {
         const newPc = new RTCPeerConnection(config);
+        
         newPc.onicecandidate = (e) => {
             if (!e.candidate) {
-                // SDP圧縮処理（元のロジックを維持）
-                const sdp = newPc.localDescription.sdp;
-                localSdp.value = btoa(sdp); 
+                // SDPをBase64化して短縮
+                localSdp.value = btoa(newPc.localDescription.sdp);
                 setStatus("コード生成完了。相手に送ってください。");
             }
         };
+
         newPc.ontrack = (e) => {
-            console.log("Track received");
             if (v.srcObject !== e.streams[0]) {
                 v.srcObject = e.streams[0];
-                // 修正点2: iOS/Android対策。ユーザーアクション内でplay()を呼ぶ必要がある場合がある
-                v.play().catch(err => console.log("Auto-play blocked:", err));
+                // iOS/Androidでの再生ロック解除
+                v.play().catch(err => console.log("Play error:", err));
                 setStatus("ストリーム受信中");
             }
         };
+
         return newPc;
     }
 
     async function initHost() {
         try {
-            // 注意: モバイルブラウザの多くは getDisplayMedia (画面共有) をサポートしていません。
-            // PCからの配信を想定しています。
+            // PCブラウザ用: 画面共有
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
             v.srcObject = stream;
-            // 修正点3: ホスト側は自分の声をループバックさせないようミュート
-            v.muted = true; 
+            v.muted = true; // ホスト側はハウリング防止で消音
             prepareNewConnection();
-            document.getElementById('multiInfo').innerText = "複数人に配信する場合：一人と接続完了後、再度「1.短縮コード」を生成して次の人に送ってください。";
+            document.getElementById('multiInfo').innerText = "接続完了後、再度コードを生成すれば次の人と繋がれます。";
             showCommArea("配信ホスト");
         } catch (e) { 
-            console.error(e);
-            alert("配信開始に失敗しました。PCのブラウザで試してください。"); 
+            alert("配信の開始に失敗しました。PCのブラウザ（Chrome/Edge等）で試してください。"); 
         }
     }
 
@@ -104,14 +107,17 @@
 
     async function initGuest() {
         pc = createPC();
-        // 修正点4: モバイルで音声を出すための予備動作
-        v.play(); 
+        // ユーザー操作のタイミングでvideoの再生権限を取得しておく
+        v.play().catch(() => {});
         showCommArea("視聴ゲスト");
     }
 
     async function connect() {
         try {
-            const rawSdp = atob(remoteSdp.value.trim());
+            const val = remoteSdp.value.trim();
+            if(!val) return alert("コードを入力してください");
+
+            const rawSdp = atob(val);
             const type = rawSdp.includes("setup:actpass") ? "offer" : "answer";
             
             await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp: rawSdp }));
@@ -129,11 +135,11 @@
                     }, 2000);
                 }
             }
-            // 接続実行ボタンを押したタイミングでVideo再生を許可する（iOS対策）
+            // 接続ボタンを押した瞬間にビデオ再生を試行（iOS対策）
+            v.muted = false; // 視聴側は音が出るように
             v.play().catch(() => {});
         } catch (e) { 
-            console.error(e);
-            alert("コードが正しくありません"); 
+            alert("接続エラー：コードが正しくないか、通信環境により拒否されました。"); 
         }
     }
 
@@ -146,9 +152,13 @@
 
     function copyCode() {
         localSdp.select();
-        localSdp.setSelectionRange(0, 99999); // Mobile対策
-        document.execCommand('copy');
-        setStatus("コピーしました。相手に送ってください。");
+        localSdp.setSelectionRange(0, 99999); // iOS対策
+        try {
+            document.execCommand('copy');
+            setStatus("コピー成功！相手に送ってください。");
+        } catch (err) {
+            setStatus("コピー失敗。手動で選択してコピーしてください。");
+        }
     }
 </script>
 </body>
